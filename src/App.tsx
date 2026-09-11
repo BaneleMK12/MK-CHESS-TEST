@@ -6,7 +6,6 @@ import {
   applyMove,
   chooseCpuMove,
   isCheckmate,
-  isInCheck,
   isStalemate,
   legalMoves,
   moveLabel,
@@ -27,6 +26,8 @@ import {
 } from 'wouter';
 
 const PIECE_NAMES: Record<PieceType, string> = { k: 'KING', q: 'QUEEN', r: 'ROOK', b: 'BISHOP', n: 'KNIGHT', p: 'PAWN' };
+const MAX_WHITE_MOVES = 4;
+const FAILED_ATTEMPTS_KEY = 'mk-chess-failed-attempts';
 
 type Animation = { move: Move; boardBefore: Board; started: number };
 
@@ -197,27 +198,70 @@ function Home() {
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ move: Move; label: string; side: Color }>>([]);
   const [captured, setCaptured] = useState<Piece[]>([]);
+  const [whiteMoveCount, setWhiteMoveCount] = useState(0);
+  const [failedAttempts, setFailedAttempts] = useState(() => {
+    const saved = Number(window.localStorage.getItem(FAILED_ATTEMPTS_KEY));
+    return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+  });
   const [turn, setTurn] = useState<Color>('w');
   const [thinking, setThinking] = useState(false);
   const [result, setResult] = useState<'playing' | 'success' | 'failure'>('playing');
   const [animation, setAnimation] = useState<Animation | null>(null);
   const timerRef = useRef<number | null>(null);
-  const moveCount = history.filter((item) => item.side === 'w').length;
+  const whiteMoveCountRef = useRef(0);
+  const thinkingRef = useRef(false);
+  const attemptFinishedRef = useRef(false);
+  const attemptIdRef = useRef(0);
   const selectedMoves = selected ? legalMoves(board, 'w', selected) : [];
 
   useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current); }, []);
+  useEffect(() => {
+    window.localStorage.setItem(FAILED_ATTEMPTS_KEY, String(failedAttempts));
+  }, [failedAttempts]);
+
+  const finishFailure = () => {
+    if (attemptFinishedRef.current) return;
+    attemptFinishedRef.current = true;
+    thinkingRef.current = false;
+    setThinking(false);
+    setTurn('w');
+    setSelected(null);
+    setResult('failure');
+    setFailedAttempts((count) => count + 1);
+  };
+
+  const finishSuccess = () => {
+    if (attemptFinishedRef.current) return;
+    attemptFinishedRef.current = true;
+    thinkingRef.current = false;
+    setThinking(false);
+    setTurn('w');
+    setSelected(null);
+    setResult('success');
+  };
 
   const reset = () => {
     if (timerRef.current) window.clearTimeout(timerRef.current);
+    attemptIdRef.current += 1;
+    attemptFinishedRef.current = false;
+    thinkingRef.current = false;
+    whiteMoveCountRef.current = 0;
     setBoard(parseFen('4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1'));
-    setSelected(null); setHistory([]); setCaptured([]); setTurn('w'); setThinking(false); setResult('playing'); setAnimation(null);
+    setSelected(null);
+    setHistory([]);
+    setCaptured([]);
+    setWhiteMoveCount(0);
+    setTurn('w');
+    setThinking(false);
+    setResult('playing');
+    setAnimation(null);
   };
 
-  const acceptCpuMove = (currentBoard: Board, moveNumber: number) => {
+  const acceptCpuMove = (currentBoard: Board, attemptId: number) => {
+    if (attemptId !== attemptIdRef.current || attemptFinishedRef.current) return;
     const cpuMove = chooseCpuMove(currentBoard);
     if (!cpuMove) {
-      setThinking(false); setTurn('w');
-      setResult(isInCheck(currentBoard, 'w') ? 'failure' : 'failure');
+      finishFailure();
       return;
     }
     const next = applyMove(currentBoard, cpuMove);
@@ -225,32 +269,46 @@ function Home() {
     setBoard(next);
     setHistory((items) => [...items, { move: cpuMove, label: moveLabel(cpuMove, next), side: 'b' }]);
     if (cpuMove.captured) setCaptured((items) => [...items, cpuMove.captured as Piece]);
+    thinkingRef.current = false;
     setThinking(false);
     setTurn('w');
-    if (isCheckmate(next, 'w') || isStalemate(next, 'w') || moveNumber >= 4) setResult('failure');
+    if (isCheckmate(next, 'w') || isStalemate(next, 'w')) finishFailure();
     window.setTimeout(() => setAnimation(null), 390);
   };
 
   const onSquareClick = (square: string) => {
-    if (thinking || result !== 'playing' || turn !== 'w') return;
+    if (thinkingRef.current || attemptFinishedRef.current || result !== 'playing' || turn !== 'w') return;
+    if (whiteMoveCountRef.current >= MAX_WHITE_MOVES) {
+      finishFailure();
+      return;
+    }
     const piece = board[parseSquare(square)[1]][parseSquare(square)[0]];
     const chosenMove = selectedMoves.find((move) => move.to === square);
     if (chosenMove) {
+      thinkingRef.current = true;
+      const nextCount = whiteMoveCountRef.current + 1;
+      whiteMoveCountRef.current = nextCount;
+      setWhiteMoveCount(nextCount);
       const next = applyMove(board, chosenMove);
       setAnimation({ move: chosenMove, boardBefore: board, started: performance.now() });
       setBoard(next);
       setHistory((items) => [...items, { move: chosenMove, label: moveLabel(chosenMove, next), side: 'w' }]);
       if (chosenMove.captured) setCaptured((items) => [...items, chosenMove.captured as Piece]);
       setSelected(null);
-      const nextCount = moveCount + 1;
       if (isCheckmate(next, 'b')) {
-        setResult('success'); setTurn('w'); window.setTimeout(() => setAnimation(null), 390); return;
+        finishSuccess();
+        window.setTimeout(() => setAnimation(null), 390);
+        return;
       }
-      if (isStalemate(next, 'b') || nextCount >= 4) {
-        setResult('failure'); setTurn('w'); window.setTimeout(() => setAnimation(null), 390); return;
+      if (isStalemate(next, 'b') || nextCount >= MAX_WHITE_MOVES) {
+        finishFailure();
+        window.setTimeout(() => setAnimation(null), 390);
+        return;
       }
-      setThinking(true); setTurn('b');
-      timerRef.current = window.setTimeout(() => acceptCpuMove(next, nextCount), 680);
+      setThinking(true);
+      setTurn('b');
+      const attemptId = attemptIdRef.current;
+      timerRef.current = window.setTimeout(() => acceptCpuMove(next, attemptId), 680);
       return;
     }
     if (piece?.color === 'w') setSelected(selected === square ? null : square);
@@ -306,13 +364,14 @@ function Home() {
             <p className="focus-copy">A sparse position. A precise idea. Every move is yours.</p>
             <div className="divider" />
             <div className="position-line"><span>OBJECTIVE</span><strong>CHECKMATE THE KING</strong></div>
-            <div className="position-line" style={{ marginTop: 13 }}><span>PLAYER LIMIT</span><strong>{moveCount} / 4 WHITE MOVES</strong></div>
+              <div className="position-line" style={{ marginTop: 13 }}><span>PLAYER LIMIT</span><strong>{whiteMoveCount} / {MAX_WHITE_MOVES} WHITE MOVES</strong></div>
+              <div className="position-line" style={{ marginTop: 13 }}><span>FAILED ATTEMPTS</span><strong data-testid="text-failed-attempts">{failedAttempts}</strong></div>
             <div className="position-line" style={{ marginTop: 13 }}><span>CAPTURED</span><strong data-testid="text-captured">{whiteTaken.length ? `BLACK ${whiteTaken.map((piece) => PIECE_NAMES[piece.type]).join(', ')}` : 'NONE'}</strong></div>
           </div>
           <div className="move-panel">
             <div className="move-panel-head"><div className="section-label">MOVE RECORD</div><div className="move-count">{history.length} PLY</div></div>
             <div className="move-list" data-testid="text-move-history">
-              {history.length ? history.map((item, index) => <span key={`${item.label}-${index}`} className={item.side === 'b' ? 'cpu' : ''}>{item.side === 'w' ? `${Math.floor(index / 2) + 1}.` : 'CPU'} {item.label}</span>) : <span className="empty-moves">NO MOVES YET</span>}
+              {history.length ? history.map((item, index) => <span key={`${item.label}-${index}`} className={item.side === 'b' ? 'cpu' : ''}>{item.side === 'w' ? `${history.slice(0, index + 1).filter((entry) => entry.side === 'w').length}.` : 'CPU'} {item.label}</span>) : <span className="empty-moves">NO MOVES YET</span>}
             </div>
             <div className="position-line" style={{ marginTop: 16 }}><span>YOUR PIECES TAKEN</span><strong>{blackTaken.length ? blackTaken.map((piece) => PIECE_NAMES[piece.type]).join(', ') : 'NONE'}</strong></div>
             <button type="button" className="reset-button" data-testid="button-reset" onClick={reset}><RotateCcw size={14} /> Reset challenge</button>

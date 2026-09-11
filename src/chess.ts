@@ -75,7 +75,10 @@ function attacksSquare(board: Board, fromX: number, fromY: number, targetX: numb
   if (piece.type === 'k') return Math.max(ax, ay) === 1;
   const diagonal = ax === ay && ax > 0;
   const straight = (dx === 0) !== (dy === 0);
-  const canSlide = piece.type === 'q' || (piece.type === 'b' && diagonal) || (piece.type === 'r' && straight);
+  const canSlide =
+    (piece.type === 'q' && (diagonal || straight)) ||
+    (piece.type === 'b' && diagonal) ||
+    (piece.type === 'r' && straight);
   if (!canSlide) return false;
   const stepX = Math.sign(dx);
   const stepY = Math.sign(dy);
@@ -199,6 +202,56 @@ export function moveLabel(move: Move, boardAfter: Board) {
 
 const pieceValue: Record<PieceType, number> = { p: 1, n: 3, b: 3.2, r: 5, q: 9, k: 100 };
 
+const searchValue: Record<PieceType, number> = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+function evaluateBoard(board: Board): number {
+  let score = 0;
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      const piece = board[y][x];
+      if (!piece) continue;
+      const material = searchValue[piece.type];
+      const centerDistance = Math.abs(3.5 - x) + Math.abs(3.5 - y);
+      const centrality = Math.max(0, 3.5 - centerDistance / 2);
+      score += piece.color === 'b' ? material : -material;
+      score += piece.color === 'b' ? centrality : -centrality;
+    }
+  }
+
+  const blackMoves = legalMoves(board, 'b');
+  const whiteMoves = legalMoves(board, 'w');
+  score += (blackMoves.length - whiteMoves.length) * 2;
+  if (isInCheck(board, 'b')) score -= 45;
+  if (isInCheck(board, 'w')) score += 45;
+  if (!whiteMoves.length) return isInCheck(board, 'w') ? 100000 : 0;
+  if (!blackMoves.length) return isInCheck(board, 'b') ? -100000 : 0;
+  return score;
+}
+
+function minimax(board: Board, depth: number, blackToMove: boolean, alpha: number, beta: number): number {
+  if (depth === 0) return evaluateBoard(board);
+  const moves = legalMoves(board, blackToMove ? 'b' : 'w');
+  if (!moves.length) return evaluateBoard(board);
+
+  if (blackToMove) {
+    let best = -Infinity;
+    for (const move of moves) {
+      best = Math.max(best, minimax(applyMove(board, move), depth - 1, false, alpha, beta));
+      alpha = Math.max(alpha, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  }
+
+  let best = Infinity;
+  for (const move of moves) {
+    best = Math.min(best, minimax(applyMove(board, move), depth - 1, true, alpha, beta));
+    beta = Math.min(beta, best);
+    if (beta <= alpha) break;
+  }
+  return best;
+}
+
 export function chooseCpuMove(board: Board): Move | null {
   const moves = legalMoves(board, 'b');
   if (!moves.length) return null;
@@ -206,15 +259,15 @@ export function chooseCpuMove(board: Board): Move | null {
     const after = applyMove(board, move);
     const givesMate = isCheckmate(after, 'w');
     const givesCheck = isInCheck(after, 'w');
-    const [x, y] = parseSquare(move.to);
+    const score = minimax(after, 2, false, -Infinity, Infinity);
     return {
       move,
       score:
-        (givesMate ? 10000 : 0) +
-        (givesCheck ? 400 : 0) +
+        (givesMate ? 100000 : 0) +
+        (givesCheck ? 120 : 0) +
+        score +
         (move.captured ? pieceValue[move.captured.type] * 30 : 0) +
-        (7 - y) * 0.02 +
-        x * 0.001,
+        (move.promotion ? 900 : 0),
     };
   });
   ranked.sort((a, b) => b.score - a.score || a.move.from.localeCompare(b.move.from) || a.move.to.localeCompare(b.move.to));
