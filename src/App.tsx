@@ -30,187 +30,10 @@ const PIECE_NAMES: Record<PieceType, string> = { k: 'KING', q: 'QUEEN', r: 'ROOK
 
 type Animation = { move: Move; boardBefore: Board; started: number };
 
-function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radius: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.arcTo(x + w, y, x + w, y + h, radius);
-  ctx.arcTo(x + w, y + h, x, y + h, radius);
-  ctx.arcTo(x, y + h, x, y, radius);
-  ctx.arcTo(x, y, x + w, y, radius);
-  ctx.closePath();
-}
-
-function drawReferencePath(
-  ctx: CanvasRenderingContext2D,
-  build: () => void,
-  fill: CanvasGradient,
-  edge: string,
-) {
-  ctx.beginPath();
-  build();
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.strokeStyle = edge;
-  ctx.stroke();
-}
-
-function drawReferenceBase(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  scale: number,
-  fill: CanvasGradient,
-  edge: string,
-  detail: string,
-) {
-  roundedRect(ctx, cx - scale * .22, cy + scale * .21, scale * .44, scale * .13, scale * .035);
-  ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = edge; ctx.stroke();
-  roundedRect(ctx, cx - scale * .275, cy + scale * .30, scale * .55, scale * .13, scale * .055);
-  ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = edge; ctx.stroke();
-  ctx.strokeStyle = detail;
-  ctx.beginPath();
-  ctx.moveTo(cx - scale * .20, cy + scale * .265);
-  ctx.lineTo(cx + scale * .20, cy + scale * .265);
-  ctx.moveTo(cx - scale * .245, cy + scale * .365);
-  ctx.lineTo(cx + scale * .245, cy + scale * .365);
-  ctx.stroke();
-}
-
-function drawReferenceBand(ctx: CanvasRenderingContext2D, cx: number, y: number, halfWidth: number, scale: number, detail: string) {
-  ctx.strokeStyle = detail;
-  ctx.beginPath();
-  ctx.moveTo(cx - halfWidth, y);
-  ctx.lineTo(cx + halfWidth, y);
-  ctx.moveTo(cx - halfWidth * .82, y + scale * .025);
-  ctx.lineTo(cx + halfWidth * .82, y + scale * .025);
-  ctx.stroke();
-}
-
-function drawReferencePiece(ctx: CanvasRenderingContext2D, piece: Piece, cx: number, cy: number, scale: number) {
-  const isWhite = piece.color === 'w';
-  const fill = ctx.createLinearGradient(cx - scale * .24, cy - scale * .46, cx + scale * .24, cy + scale * .42);
-  if (isWhite) {
-    fill.addColorStop(0, '#ffffff');
-    fill.addColorStop(.52, '#e8e1d8');
-    fill.addColorStop(1, '#9d9185');
-  } else {
-    fill.addColorStop(0, '#555c68');
-    fill.addColorStop(.52, '#2a303c');
-    fill.addColorStop(1, '#0b0e15');
-  }
-  const edge = isWhite ? '#312a29' : '#f1d7b9';
-  const detail = isWhite ? 'rgba(255,255,255,.62)' : 'rgba(207,216,228,.68)';
-  ctx.save();
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.lineWidth = Math.max(1.5, scale * .03);
-  ctx.shadowColor = 'rgba(0,0,0,.45)';
-  ctx.shadowBlur = scale * .035;
-  ctx.shadowOffsetY = scale * .04;
-  ctx.fillStyle = 'rgba(0,0,0,.28)';
-  ctx.beginPath();
-  ctx.ellipse(cx, cy + scale * .405, scale * .255, scale * .055, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowColor = 'transparent';
-
-  const path = (build: () => void) => drawReferencePath(ctx, build, fill, edge);
-  if (piece.type === 'p') {
-    path(() => {
-      ctx.moveTo(cx - scale * .095, cy - scale * .17);
-      ctx.bezierCurveTo(cx - scale * .105, cy - scale * .06, cx - scale * .095, cy + scale * .07, cx - scale * .145, cy + scale * .18);
-      ctx.bezierCurveTo(cx - scale * .17, cy + scale * .235, cx - scale * .19, cy + scale * .27, cx - scale * .20, cy + scale * .30);
-      ctx.lineTo(cx + scale * .20, cy + scale * .30);
-      ctx.bezierCurveTo(cx + scale * .19, cy + scale * .27, cx + scale * .17, cy + scale * .235, cx + scale * .145, cy + scale * .18);
-      ctx.bezierCurveTo(cx + scale * .095, cy + scale * .07, cx + scale * .105, cy - scale * .06, cx + scale * .095, cy - scale * .17);
-      ctx.closePath();
-    });
-    ctx.fillStyle = fill; ctx.strokeStyle = edge;
-    ctx.beginPath(); ctx.ellipse(cx, cy - scale * .17, scale * .14, scale * .045, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(cx, cy - scale * .30, scale * .108, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.strokeStyle = detail; ctx.beginPath(); ctx.moveTo(cx - scale * .09, cy - scale * .315); ctx.lineTo(cx + scale * .045, cy - scale * .355); ctx.stroke();
-  } else if (piece.type === 'r') {
-    path(() => {
-      ctx.moveTo(cx - scale * .165, cy - scale * .27);
-      ctx.bezierCurveTo(cx - scale * .15, cy - scale * .14, cx - scale * .13, cy + scale * .08, cx - scale * .17, cy + scale * .30);
-      ctx.lineTo(cx + scale * .17, cy + scale * .30);
-      ctx.bezierCurveTo(cx + scale * .13, cy + scale * .08, cx + scale * .15, cy - scale * .14, cx + scale * .165, cy - scale * .27);
-      ctx.closePath();
-    });
-    path(() => {
-      ctx.moveTo(cx - scale * .20, cy - scale * .24); ctx.lineTo(cx - scale * .20, cy - scale * .43);
-      ctx.lineTo(cx - scale * .125, cy - scale * .43); ctx.lineTo(cx - scale * .125, cy - scale * .35);
-      ctx.lineTo(cx - scale * .045, cy - scale * .35); ctx.lineTo(cx - scale * .045, cy - scale * .43);
-      ctx.lineTo(cx + scale * .045, cy - scale * .43); ctx.lineTo(cx + scale * .045, cy - scale * .35);
-      ctx.lineTo(cx + scale * .125, cy - scale * .35); ctx.lineTo(cx + scale * .125, cy - scale * .43);
-      ctx.lineTo(cx + scale * .20, cy - scale * .43); ctx.lineTo(cx + scale * .20, cy - scale * .24); ctx.closePath();
-    });
-    drawReferenceBand(ctx, cx, cy - scale * .235, scale * .18, scale, detail);
-  } else if (piece.type === 'n') {
-    path(() => {
-      ctx.moveTo(cx - scale * .18, cy + scale * .30);
-      ctx.bezierCurveTo(cx - scale * .19, cy + scale * .14, cx - scale * .205, cy + scale * .025, cx - scale * .18, cy - scale * .085);
-      ctx.bezierCurveTo(cx - scale * .16, cy - scale * .16, cx - scale * .20, cy - scale * .22, cx - scale * .23, cy - scale * .28);
-      ctx.lineTo(cx - scale * .13, cy - scale * .30);
-      ctx.bezierCurveTo(cx - scale * .10, cy - scale * .34, cx - scale * .105, cy - scale * .405, cx - scale * .08, cy - scale * .445);
-      ctx.lineTo(cx - scale * .015, cy - scale * .375);
-      ctx.bezierCurveTo(cx + scale * .045, cy - scale * .43, cx + scale * .12, cy - scale * .43, cx + scale * .17, cy - scale * .38);
-      ctx.bezierCurveTo(cx + scale * .15, cy - scale * .32, cx + scale * .20, cy - scale * .27, cx + scale * .195, cy - scale * .18);
-      ctx.bezierCurveTo(cx + scale * .19, cy - scale * .07, cx + scale * .13, cy + scale * .08, cx + scale * .16, cy + scale * .30);
-      ctx.closePath();
-    });
-    ctx.strokeStyle = detail; ctx.beginPath();
-    ctx.moveTo(cx - scale * .14, cy - scale * .30); ctx.lineTo(cx + scale * .12, cy - scale * .35);
-    ctx.moveTo(cx - scale * .13, cy - scale * .10); ctx.lineTo(cx + scale * .055, cy - scale * .16); ctx.stroke();
-  } else if (piece.type === 'b') {
-    path(() => {
-      ctx.moveTo(cx - scale * .115, cy - scale * .19);
-      ctx.bezierCurveTo(cx - scale * .12, cy - scale * .08, cx - scale * .13, cy + scale * .09, cx - scale * .17, cy + scale * .30);
-      ctx.lineTo(cx + scale * .17, cy + scale * .30);
-      ctx.bezierCurveTo(cx + scale * .13, cy + scale * .09, cx + scale * .12, cy - scale * .08, cx + scale * .115, cy - scale * .19);
-      ctx.closePath();
-    });
-    path(() => {
-      ctx.moveTo(cx, cy - scale * .47);
-      ctx.bezierCurveTo(cx - scale * .11, cy - scale * .40, cx - scale * .14, cy - scale * .27, cx - scale * .10, cy - scale * .19);
-      ctx.lineTo(cx + scale * .10, cy - scale * .19);
-      ctx.bezierCurveTo(cx + scale * .14, cy - scale * .27, cx + scale * .11, cy - scale * .40, cx, cy - scale * .47);
-      ctx.closePath();
-    });
-    ctx.strokeStyle = detail; ctx.beginPath(); ctx.moveTo(cx - scale * .04, cy - scale * .405); ctx.lineTo(cx + scale * .045, cy - scale * .245); ctx.stroke();
-    drawReferenceBand(ctx, cx, cy - scale * .18, scale * .12, scale, detail);
-  } else if (piece.type === 'q') {
-    path(() => {
-      ctx.moveTo(cx - scale * .13, cy - scale * .20);
-      ctx.bezierCurveTo(cx - scale * .13, cy - scale * .05, cx - scale * .12, cy + scale * .10, cx - scale * .18, cy + scale * .30);
-      ctx.lineTo(cx + scale * .18, cy + scale * .30);
-      ctx.bezierCurveTo(cx + scale * .12, cy + scale * .10, cx + scale * .13, cy - scale * .05, cx + scale * .13, cy - scale * .20);
-      ctx.closePath();
-    });
-    path(() => {
-      ctx.moveTo(cx - scale * .205, cy - scale * .20); ctx.lineTo(cx - scale * .17, cy - scale * .40);
-      ctx.bezierCurveTo(cx - scale * .13, cy - scale * .34, cx - scale * .095, cy - scale * .30, cx - scale * .055, cy - scale * .39);
-      ctx.lineTo(cx, cy - scale * .30); ctx.lineTo(cx + scale * .055, cy - scale * .39);
-      ctx.bezierCurveTo(cx + scale * .095, cy - scale * .30, cx + scale * .13, cy - scale * .34, cx + scale * .17, cy - scale * .40);
-      ctx.lineTo(cx + scale * .205, cy - scale * .20); ctx.closePath();
-    });
-    drawReferenceBand(ctx, cx, cy - scale * .19, scale * .18, scale, detail);
-  } else {
-    path(() => {
-      ctx.moveTo(cx - scale * .135, cy - scale * .20);
-      ctx.bezierCurveTo(cx - scale * .14, cy - scale * .05, cx - scale * .13, cy + scale * .10, cx - scale * .18, cy + scale * .30);
-      ctx.lineTo(cx + scale * .18, cy + scale * .30);
-      ctx.bezierCurveTo(cx + scale * .13, cy + scale * .10, cx + scale * .14, cy - scale * .05, cx + scale * .135, cy - scale * .20);
-      ctx.closePath();
-    });
-    ctx.fillStyle = fill; ctx.strokeStyle = edge;
-    roundedRect(ctx, cx - scale * .18, cy - scale * .35, scale * .36, scale * .17, scale * .035); ctx.fill(); ctx.stroke();
-    roundedRect(ctx, cx - scale * .026, cy - scale * .49, scale * .052, scale * .20, scale * .012); ctx.stroke();
-    roundedRect(ctx, cx - scale * .085, cy - scale * .425, scale * .17, scale * .05, scale * .012); ctx.stroke();
-    drawReferenceBand(ctx, cx, cy - scale * .19, scale * .18, scale, detail);
-  }
-  drawReferenceBase(ctx, cx, cy, scale, fill, edge, detail);
-  ctx.restore();
-}
+const PIECE_IMAGE_PATHS: Record<Color, Record<PieceType, string>> = {
+  w: { k: 'wK.png', q: 'wQ.png', r: 'wR.png', b: 'wB.png', n: 'wN.png', p: 'wP.png' },
+  b: { k: 'bK.png', q: 'bQ.png', r: 'bR.png', b: 'bB.png', n: 'bN.png', p: 'bP.png' },
+};
 
 function ChessBoard({
   board,
@@ -227,6 +50,7 @@ function ChessBoard({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const holderRef = useRef<HTMLDivElement>(null);
+  const imageCacheRef = useRef(new Map<string, HTMLImageElement>());
   const destinationMap = new Map(destinations.map((move) => [move.to, move]));
 
   useEffect(() => {
@@ -236,6 +60,22 @@ function ChessBoard({
     let frame: number | null = null;
     let size = 0;
     let dpr = 1;
+    const imageCache = imageCacheRef.current;
+    const basePath = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+    const getPieceImage = (piece: Piece) => {
+      const key = `${piece.color}${piece.type}`;
+      const cached = imageCache.get(key);
+      if (cached) return cached;
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = `${basePath}pieces/${PIECE_IMAGE_PATHS[piece.color][piece.type]}`;
+      image.onload = () => {
+        if (!cancelled) draw();
+      };
+      imageCache.set(key, image);
+      return image;
+    };
+    let cancelled = false;
     const draw = (timestamp = performance.now()) => {
       const rect = holder.getBoundingClientRect();
       if (!size) size = rect.width;
@@ -282,13 +122,29 @@ function ChessBoard({
         const squareId = squareName(x, y);
         const isAnimatedSquare = animation && (animation.move.from === squareId || animation.move.to === squareId);
         const piece = isAnimatedSquare ? null : board[y][x];
-        if (piece) drawReferencePiece(ctx, piece, x * square + square / 2, y * square + square / 2, square);
+        if (piece) {
+          const image = getPieceImage(piece);
+          if (image.complete && image.naturalWidth > 0) {
+            const padding = square * .045;
+            ctx.drawImage(image, x * square + padding, y * square + padding, square - padding * 2, square - padding * 2);
+          }
+        }
       }
       if (animation) {
         const [fx, fy] = parseSquare(animation.move.from);
         const [tx, ty] = parseSquare(animation.move.to);
         const eased = moving < 0.5 ? 4 * moving * moving * moving : 1 - Math.pow(-2 * moving + 2, 3) / 2;
-        drawReferencePiece(ctx, animation.move.piece, (fx + (tx - fx) * eased) * square + square / 2, (fy + (ty - fy) * eased) * square + square / 2, square);
+        const image = getPieceImage(animation.move.piece);
+        if (image.complete && image.naturalWidth > 0) {
+          const padding = square * .045;
+          ctx.drawImage(
+            image,
+            (fx + (tx - fx) * eased) * square + padding,
+            (fy + (ty - fy) * eased) * square + padding,
+            square - padding * 2,
+            square - padding * 2,
+          );
+        }
         if (moving < 1) frame = requestAnimationFrame(draw);
       }
     };
@@ -308,7 +164,7 @@ function ChessBoard({
     const observer = new ResizeObserver(resize);
     observer.observe(holder);
     resize();
-    return () => { observer.disconnect(); if (frame !== null) cancelAnimationFrame(frame); };
+    return () => { cancelled = true; observer.disconnect(); if (frame !== null) cancelAnimationFrame(frame); };
   }, [board, selected, destinations, animation]);
 
   return (
