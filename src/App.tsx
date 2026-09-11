@@ -1,255 +1,383 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AlertTriangle, Check, ChevronRight, CircleHelp, RotateCcw, Trophy, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import { RotateCcw, Trophy } from 'lucide-react';
+import {
+  applyMove,
+  chooseCpuMove,
+  isCheckmate,
+  isInCheck,
+  isStalemate,
+  legalMoves,
+  moveLabel,
+  parseFen,
+  parseSquare,
+  squareName,
+  type Board,
+  type Color,
+  type Move,
+  type Piece,
+  type PieceType,
+} from './chess';
+import {
+  Route,
+  Switch,
+  useLocation,
+  Router as WouterRouter,
+} from 'wouter';
 
-type Color = 'w' | 'b';
-type PieceType = 'k' | 'q' | 'r' | 'b' | 'n' | 'p';
-type Piece = { color: Color; type: PieceType };
-type Board = (Piece | null)[];
-type Square = { row: number; col: number };
-type Move = { from: number; to: number; capture?: Piece | null; promotion?: PieceType };
-type GameState = { board: Board; turn: Color; history: Move[]; captured: Piece[]; lastMove?: Move };
+const PIECE_NAMES: Record<PieceType, string> = { k: 'KING', q: 'QUEEN', r: 'ROOK', b: 'BISHOP', n: 'KNIGHT', p: 'PAWN' };
 
-const START_FEN = '4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1';
-const FILES = 'abcdefgh';
-const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
-const PIECE_NAMES: Record<PieceType, string> = { k: 'King', q: 'Queen', r: 'Rook', b: 'Bishop', n: 'Knight', p: 'Pawn' };
-const queryClient = new QueryClient();
+type Animation = { move: Move; boardBefore: Board; started: number };
 
-function index(row: number, col: number) { return row * 8 + col; }
-function squareName(value: number) { return `${FILES[value % 8]}${8 - Math.floor(value / 8)}`; }
-function parseFen(fen: string): GameState {
-  const fields = fen.split(' ');
-  const board: Board = Array(64).fill(null);
-  fields[0].split('/').forEach((rank, row) => {
-    let col = 0;
-    for (const token of rank) {
-      if (/\d/.test(token)) col += Number(token);
-      else { board[index(row, col)] = { color: token === token.toUpperCase() ? 'w' : 'b', type: token.toLowerCase() as PieceType }; col += 1; }
-    }
-  });
-  return { board, turn: fields[1] === 'b' ? 'b' : 'w', history: [], captured: [] };
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radius: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.closePath();
 }
-function rowCol(value: number): Square { return { row: Math.floor(value / 8), col: value % 8 }; }
-function inside(row: number, col: number) { return row >= 0 && row < 8 && col >= 0 && col < 8; }
-function opposite(color: Color): Color { return color === 'w' ? 'b' : 'w'; }
-function findKing(board: Board, color: Color) { return board.findIndex((piece) => piece?.type === 'k' && piece.color === color); }
-function pseudoMoves(state: GameState, from: number, attacksOnly = false): Move[] {
-  const piece = state.board[from]; if (!piece) return [];
-  const { row, col } = rowCol(from);
-  const moves: Move[] = [];
-  const push = (r: number, c: number) => {
-    if (!inside(r, c)) return false;
-    const to = index(r, c); const target = state.board[to];
-    if (target?.color === piece.color) return false;
-    if (!target) moves.push({ from, to });
-    if (target && target.color !== piece.color) moves.push({ from, to, capture: target });
-    return !target;
+
+function drawPiece(ctx: CanvasRenderingContext2D, piece: Piece, cx: number, cy: number, size: number) {
+  const isWhite = piece.color === 'w';
+  const fill = isWhite ? '#f3e9c8' : '#24201a';
+  const shadow = isWhite ? '#937b4a' : '#090806';
+  const outline = isWhite ? '#6e542c' : '#c9a867';
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,.55)';
+  ctx.shadowBlur = size * .09;
+  ctx.shadowOffsetY = size * .055;
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = Math.max(1.2, size * .025);
+
+  const base = (width: number, y: number, h: number) => {
+    roundedRect(ctx, -width / 2, y, width, h, size * .035);
+    ctx.fill();
+    ctx.stroke();
+  };
+  const stem = (width: number, y: number, h: number) => {
+    roundedRect(ctx, -width / 2, y, width, h, size * .04);
+    ctx.fill();
+    ctx.stroke();
   };
   if (piece.type === 'p') {
-    const direction = piece.color === 'w' ? -1 : 1;
-    for (const dc of [-1, 1]) {
-      const r = row + direction, c = col + dc;
-      if (inside(r, c)) {
-        const target = state.board[index(r, c)];
-        if (attacksOnly) moves.push({ from, to: index(r, c), capture: target });
-        else if (target && target.color !== piece.color) moves.push({ from, to: index(r, c), capture: target, promotion: r === 0 || r === 7 ? 'q' : undefined });
-      }
-    }
-    if (attacksOnly) return moves;
-    const one = row + direction;
-    if (inside(one, col) && !state.board[index(one, col)]) {
-      moves.push({ from, to: index(one, col), promotion: one === 0 || one === 7 ? 'q' : undefined });
-      const start = piece.color === 'w' ? 6 : 1;
-      if (row === start && !state.board[index(row + direction * 2, col)]) moves.push({ from, to: index(row + direction * 2, col) });
-    }
-    return moves;
-  }
-  if (piece.type === 'n') {
-    for (const [dr, dc] of [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]]) push(row + dr, col + dc);
-  } else if (piece.type === 'k') {
-    for (let dr = -1; dr <= 1; dr += 1) for (let dc = -1; dc <= 1; dc += 1) if (dr || dc) push(row + dr, col + dc);
+    ctx.beginPath();
+    ctx.arc(0, -size * .23, size * .13, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    stem(size * .16, -size * .12, size * .17);
+    base(size * .35, size * .035, size * .11);
+    base(size * .43, size * .14, size * .11);
+  } else if (piece.type === 'n') {
+    ctx.beginPath();
+    ctx.moveTo(-size * .18, size * .24);
+    ctx.lineTo(-size * .2, -size * .12);
+    ctx.quadraticCurveTo(-size * .2, -size * .32, -size * .03, -size * .4);
+    ctx.lineTo(size * .2, -size * .33);
+    ctx.lineTo(size * .13, -size * .19);
+    ctx.lineTo(size * .23, -size * .05);
+    ctx.lineTo(size * .08, size * .12);
+    ctx.lineTo(size * .18, size * .24);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(size * .07, -size * .27, size * .018, 0, Math.PI * 2); ctx.fillStyle = outline; ctx.fill();
+    base(size * .46, size * .22, size * .1);
+  } else if (piece.type === 'b') {
+    ctx.beginPath();
+    ctx.moveTo(0, -size * .44);
+    ctx.quadraticCurveTo(size * .19, -size * .31, size * .1, -size * .12);
+    ctx.lineTo(size * .09, size * .12);
+    ctx.lineTo(size * .19, size * .24);
+    ctx.lineTo(-size * .19, size * .24);
+    ctx.lineTo(-size * .09, size * .12);
+    ctx.lineTo(-size * .1, -size * .12);
+    ctx.quadraticCurveTo(-size * .19, -size * .31, 0, -size * .44);
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-size * .04, -size * .37); ctx.lineTo(size * .05, -size * .13); ctx.strokeStyle = shadow; ctx.stroke();
+    base(size * .47, size * .22, size * .1);
+  } else if (piece.type === 'r') {
+    base(size * .38, -size * .35, size * .13);
+    ctx.beginPath();
+    ctx.moveTo(-size * .17, -size * .23); ctx.lineTo(size * .17, -size * .23);
+    ctx.lineTo(size * .13, size * .13); ctx.lineTo(-size * .13, size * .13); ctx.closePath(); ctx.fill(); ctx.stroke();
+    base(size * .48, size * .22, size * .1);
+  } else if (piece.type === 'q') {
+    ctx.beginPath();
+    ctx.moveTo(-size * .23, -size * .32); ctx.lineTo(-size * .13, -size * .09); ctx.lineTo(-size * .06, -size * .28);
+    ctx.lineTo(0, -size * .09); ctx.lineTo(size * .08, -size * .29); ctx.lineTo(size * .16, -size * .09); ctx.lineTo(size * .23, -size * .32);
+    ctx.lineTo(size * .17, size * .15); ctx.lineTo(-size * .17, size * .15); ctx.closePath(); ctx.fill(); ctx.stroke();
+    for (const dot of [-.19, 0, .19]) { ctx.beginPath(); ctx.arc(size * dot, -size * .34, size * .045, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    base(size * .48, size * .16, size * .1);
   } else {
-    const directions = piece.type === 'b' ? [[-1, -1], [-1, 1], [1, -1], [1, 1]] : piece.type === 'r' ? [[-1, 0], [1, 0], [0, -1], [0, 1]] : [[-1, -1], [-1, 1], [1, -1], [1, 1], [-1, 0], [1, 0], [0, -1], [0, 1]];
-    for (const [dr, dc] of directions) { let r = row + dr, c = col + dc; while (inside(r, c)) { const clear = push(r, c); if (!clear) break; r += dr; c += dc; } }
+    base(size * .31, -size * .4, size * .12);
+    stem(size * .17, -size * .3, size * .35);
+    ctx.beginPath(); ctx.moveTo(-size * .23, -size * .25); ctx.lineTo(size * .23, -size * .25); ctx.stroke();
+    base(size * .46, size * .2, size * .1);
   }
-  return moves;
-}
-function attacked(board: Board, square: number, by: Color) {
-  const state: GameState = { board, turn: by, history: [], captured: [] };
-  return board.some((piece, source) => piece?.color === by && pseudoMoves(state, source, true).some((move) => move.to === square));
-}
-function applyUnchecked(state: GameState, move: Move): Board {
-  const board = [...state.board]; const moving = board[move.from];
-  board[move.from] = null; board[move.to] = moving ? { ...moving, type: move.promotion ?? moving.type } : null;
-  return board;
-}
-function leavesKingSafe(state: GameState, move: Move) {
-  const board = applyUnchecked(state, move); const king = findKing(board, state.turn);
-  return king >= 0 && !attacked(board, king, opposite(state.turn));
-}
-function legalMovesFor(state: GameState, from: number) {
-  const piece = state.board[from]; if (!piece || piece.color !== state.turn) return [];
-  return pseudoMoves(state, from).filter((move) => {
-    const target = state.board[move.to]; return target?.type !== 'k' && leavesKingSafe(state, move);
-  });
-}
-function allLegalMoves(state: GameState, color = state.turn) {
-  const scoped = color === state.turn ? state : { ...state, turn: color };
-  return scoped.board.flatMap((piece, source) => piece?.color === color ? legalMovesFor(scoped, source) : []);
-}
-function checkState(state: GameState) {
-  const king = findKing(state.board, state.turn);
-  const inCheck = king >= 0 && attacked(state.board, king, opposite(state.turn));
-  const noMoves = allLegalMoves(state).length === 0;
-  return { inCheck, checkmate: inCheck && noMoves, stalemate: !inCheck && noMoves };
-}
-function makeMove(state: GameState, move: Move): GameState {
-  const capture = state.board[move.to];
-  const next: GameState = { board: applyUnchecked(state, move), turn: opposite(state.turn), history: [...state.history, move], captured: capture ? [...state.captured, capture] : state.captured, lastMove: move };
-  return next;
-}
-function moveLabel(move: Move, state: GameState) {
-  const piece = state.board[move.from]; if (!piece) return '';
-  const prefix = piece.type === 'p' ? '' : piece.type.toUpperCase();
-  const capture = move.capture ? 'x' : '–';
-  return `${prefix}${squareName(move.from)}${capture}${squareName(move.to)}${move.promotion ? '=Q' : ''}`;
+  ctx.restore();
 }
 
-function PieceSvg({ type, color }: { type: PieceType; color: Color }) {
-  const dark = color === 'b';
-  return <svg viewBox="0 0 100 100" aria-label={`${dark ? 'Black' : 'White'} ${PIECE_NAMES[type]}`} role="img">
-    <g className="piece-outline" fill="currentColor" strokeWidth="2.5" strokeLinejoin="round">
-      {type === 'p' && <><path d="M50 21c-8 0-13 6-13 13 0 5 3 9 7 11-3 7-10 11-12 21h36c-2-10-9-14-12-21 4-2 7-6 7-11 0-7-5-13-13-13z" /><path d="M25 76h50v8H25z" /></>}
-      {type === 'n' && <><path d="M31 80c-3-8 3-15 10-20-7-5-10-13-7-23 3-11 11-18 25-19l11 8-8 9 10 12-11 9c9 5 13 11 13 24H31z" /><path d="M36 57c10-4 20-5 28 0" fill="none" /></>}
-      {type === 'b' && <><path d="M50 17c-8 8-15 15-15 25 0 8 6 14 10 18-8 4-13 9-15 17h40c-2-8-7-13-15-17 4-4 10-10 10-18 0-10-7-17-15-25z" /><path d="M44 28l12 15M25 76h50v8H25z" fill="none" /></>}
-      {type === 'r' && <><path d="M28 18h10v8h8v-8h8v8h8v-8h10v18l-7 5v26c5 2 8 5 10 9H25c2-4 5-7 10-9V41l-7-5V18z" /><path d="M29 76h42v8H29z" /></>}
-      {type === 'q' && <><path d="M23 20l9 12 9-15 9 15 9-15 9 15 9-12-7 39c-8 5-32 5-40 0L23 20z" /><path d="M28 68h44M25 76h50v8H25z" /></>}
-      {type === 'k' && <><path d="M45 13h10v12h10v9H55v9c5 4 10 10 10 17 0 5-3 8-6 11H41c-3-3-6-6-6-11 0-7 5-13 10-17v-9H35v-9h10V13z" /><path d="M25 76h50v8H25z" /></>}
-    </g>
-    {!dark && <path d="M31 65h38" stroke="rgba(255,255,255,.55)" strokeWidth="2" opacity=".7" />}
-  </svg>;
-}
-
-function Board({ state, selected, legal, onSquare, animation }: { state: GameState; selected: number | null; legal: Move[]; onSquare: (square: number) => void; animation: { move: Move; piece: Piece } | null }) {
-  const checked = checkState(state);
-  const checkSquare = checked.inCheck ? findKing(state.board, state.turn) : -1;
-  return <div className="board-wrap" data-testid="chess-board">
-    <div className="board-surface" />
-    <div className="board-grid">
-      {state.board.map((piece, square) => {
-        const last = state.lastMove && (state.lastMove.from === square || state.lastMove.to === square);
-        const selectedHere = selected === square;
-        const checkHere = checkSquare === square;
-        const target = legal.find((move) => move.to === square);
-        const hidden = animation && (animation.move.from === square || animation.move.to === square);
-        return <button key={square} type="button" className={`square ${last ? 'last-move' : ''} ${selectedHere ? 'selected' : ''} ${checkHere ? 'check' : ''}`} onClick={() => onSquare(square)} aria-label={squareName(square)} data-testid={`square-${squareName(square)}`}>
-          {target && (target.capture ? <span className="legal-capture" /> : <span className="legal-dot" />)}
-          {piece && !hidden && <span className={`piece ${piece.color === 'w' ? 'white' : 'black'}`}><PieceSvg type={piece.type} color={piece.color} /></span>}
-        </button>;
-      })}
-    </div>
-    <div className="board-coordinates" aria-hidden="true">
-      {RANKS.map((rank) => <span className="rank-label" key={rank}>{rank}</span>)}
-      {FILES.split('').map((file) => <span className="file-label" key={file}>{file}</span>)}
-    </div>
-    {animation && <span className={`animated-piece ${animation.piece.color === 'w' ? 'white' : 'black'}`} style={{ left: `calc(5.2% + ${(animation.move.from % 8) * 11.2}%)`, top: `calc(5.2% + ${Math.floor(animation.move.from / 8) * 11.2}%)`, ['--move-x' as string]: `${((animation.move.to % 8) - (animation.move.from % 8)) * 100}%`, ['--move-y' as string]: `${(Math.floor(animation.move.to / 8) - Math.floor(animation.move.from / 8)) * 100}%` } as CSSProperties}><PieceSvg type={animation.piece.type} color={animation.piece.color} /></span>}
-  </div>;
-}
-
-function CapturedStrip({ pieces, color }: { pieces: Piece[]; color: Color }) {
-  const list = pieces.filter((piece) => piece.color === color);
-  return <div className="capture-strip">{list.length ? list.map((piece, i) => <span className="capture-piece" key={`${piece.type}-${i}`}><PieceSvg type={piece.type} color={opposite(piece.color)} /></span>) : <span className="capture-empty">none yet</span>}</div>;
-}
-
-function ChessRoom() {
-  const [state, setState] = useState<GameState>(() => parseFen(START_FEN));
-  const [selected, setSelected] = useState<number | null>(null);
-  const [animation, setAnimation] = useState<{ move: Move; piece: Piece } | null>(null);
-  const [promotion, setPromotion] = useState<{ move: Move; piece: Piece } | null>(null);
-  const [result, setResult] = useState<'success' | 'failure' | null>(null);
-  const [notice, setNotice] = useState('White to move. Find the direct attack.');
-  const check = useMemo(() => checkState(state), [state]);
-  const StatusIcon = result === 'success' ? Check : result === 'failure' ? X : CircleHelp;
-  const whiteMoves = state.history.filter((move, i) => i % 2 === 0).length;
-  const legal = selected === null ? [] : legalMovesFor(state, selected);
-  const lastMove = state.lastMove;
+function ChessBoard({
+  board,
+  selected,
+  destinations,
+  animation,
+  onSquareClick,
+}: {
+  board: Board;
+  selected: string | null;
+  destinations: Move[];
+  animation: Animation | null;
+  onSquareClick: (square: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const holderRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<number | undefined>(undefined);
+  const destinationMap = new Map(destinations.map((move) => [move.to, move]));
 
   useEffect(() => {
-    if (!animation) return;
-    const timer = window.setTimeout(() => setAnimation(null), 500);
-    return () => window.clearTimeout(timer);
-  }, [animation]);
+    const canvas = canvasRef.current;
+    const holder = holderRef.current;
+    if (!canvas || !holder) return;
+    const draw = (timestamp = performance.now()) => {
+      const rect = holder.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const size = rect.width;
+      canvas.width = Math.max(1, Math.floor(size * dpr));
+      canvas.height = Math.max(1, Math.floor(size * dpr));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const square = size / 8;
+      const light = ctx.createLinearGradient(0, 0, size, size);
+      light.addColorStop(0, '#d9924c'); light.addColorStop(.5, '#f0b665'); light.addColorStop(1, '#c47d3c');
+      const dark = ctx.createLinearGradient(0, 0, size, size);
+      dark.addColorStop(0, '#66260c'); dark.addColorStop(.55, '#8d3210'); dark.addColorStop(1, '#4b1c0a');
+      ctx.clearRect(0, 0, size, size);
+      for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? light : dark;
+        ctx.fillRect(x * square, y * square, square + .5, square + .5);
+        ctx.strokeStyle = (x + y) % 2 === 0 ? 'rgba(255,230,174,.06)' : 'rgba(18,4,0,.10)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x * square, y * square, square, square);
+      }
+      if (selected) {
+        const [sx, sy] = parseSquare(selected);
+        ctx.fillStyle = 'rgba(245, 208, 99, .28)';
+        ctx.fillRect(sx * square, sy * square, square, square);
+        ctx.strokeStyle = 'rgba(255, 230, 145, .88)';
+        ctx.lineWidth = Math.max(2, square * .035);
+        ctx.strokeRect(sx * square + ctx.lineWidth, sy * square + ctx.lineWidth, square - ctx.lineWidth * 2, square - ctx.lineWidth * 2);
+      }
+      for (const destination of destinations) {
+        const [dx, dy] = parseSquare(destination.to);
+        const centerX = dx * square + square / 2;
+        const centerY = dy * square + square / 2;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, destination.captured ? square * .29 : square * .105, 0, Math.PI * 2);
+        ctx.fillStyle = destination.captured ? 'rgba(236, 213, 145, .18)' : 'rgba(49, 25, 11, .34)';
+        ctx.fill();
+        if (destination.captured) {
+          ctx.strokeStyle = 'rgba(251, 221, 143, .85)';
+          ctx.lineWidth = Math.max(2, square * .035);
+          ctx.stroke();
+        }
+      }
+      const moving = animation ? Math.min(1, Math.max(0, (timestamp - animation.started) / 360)) : 1;
+      for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) {
+        const squareId = squareName(x, y);
+        const isAnimatedSquare = animation && (animation.move.from === squareId || animation.move.to === squareId);
+        const piece = isAnimatedSquare ? null : board[y][x];
+        if (piece) drawPiece(ctx, piece, x * square + square / 2, y * square + square / 2, square * .82);
+      }
+      if (animation) {
+        const [fx, fy] = parseSquare(animation.move.from);
+        const [tx, ty] = parseSquare(animation.move.to);
+        const eased = 1 - Math.pow(1 - moving, 3);
+        drawPiece(ctx, animation.move.piece, (fx + (tx - fx) * eased) * square + square / 2, (fy + (ty - fy) * eased) * square + square / 2, square * .82);
+        if (moving < 1) frameRef.current = requestAnimationFrame(draw);
+      }
+    };
+    const resize = new ResizeObserver(() => draw());
+    resize.observe(holder);
+    draw();
+    return () => { resize.disconnect(); if (frameRef.current) cancelAnimationFrame(frameRef.current); };
+  }, [board, selected, destinations, animation]);
 
-  const reset = () => { setState(parseFen(START_FEN)); setSelected(null); setAnimation(null); setPromotion(null); setResult(null); setNotice('White to move. Find the direct attack.'); };
-  const commitMove = (move: Move, chosenPromotion?: PieceType) => {
-    const piece = state.board[move.from]; if (!piece) return;
-    const finalMove = { ...move, promotion: chosenPromotion ?? move.promotion };
-    const next = makeMove(state, finalMove);
-    setState(next); setSelected(null); setPromotion(null); setAnimation({ move: finalMove, piece });
-    const nextCheck = checkState(next);
-    const newWhiteMoves = next.history.filter((_, i) => i % 2 === 0).length;
-    if (nextCheck.checkmate && state.turn === 'w') { setResult('success'); setNotice('Checkmate. The king has no escape.'); }
-    else if (nextCheck.checkmate) { setResult('failure'); setNotice('The opposing king has been checkmated. Reset to try the challenge line.'); }
-    else if (nextCheck.stalemate) { setResult('failure'); setNotice('Stalemate. The attack has run out of legal moves.'); }
-    else if (newWhiteMoves >= 4 && next.turn === 'b') { setResult('failure'); setNotice('The four-move limit has been reached.'); }
-    else if (nextCheck.inCheck) setNotice(`${next.turn === 'w' ? 'White' : 'Black'} is in check. Find the reply.`);
-    else setNotice(`${next.turn === 'w' ? 'White' : 'Black'} to move. ${next.turn === 'w' ? 'Keep the pressure.' : 'Play the king’s reply manually.'}`);
-  };
-  const onSquare = (square: number) => {
-    if (result || promotion || animation) return;
-    const piece = state.board[square];
-    if (selected !== null) {
-      const move = legal.find((candidate) => candidate.to === square);
-      if (move) { if (move.promotion) setPromotion({ move, piece: state.board[move.from]! }); else commitMove(move); return; }
-      if (piece?.color === state.turn) { setSelected(square); return; }
-      setSelected(null); setNotice(`${state.turn === 'w' ? 'White' : 'Black'} to move. Select a highlighted piece.`); return;
-    }
-    if (piece?.color === state.turn) { setSelected(square); setNotice(`${PIECE_NAMES[piece.type]} selected. Choose a highlighted destination.`); }
-    else setNotice(`It is ${state.turn === 'w' ? 'White' : 'Black'}'s turn.`);
-  };
-
-  return <main className="chess-app">
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark"><Trophy size={18} strokeWidth={1.7} /></span><div className="brand-copy"><div className="brand-name">MK Board Games</div><div className="brand-kicker">Manual challenge room</div></div></div>
-        <div className="challenge-pill"><span>Challenge</span><strong>01 / 30</strong><ChevronRight size={13} /></div>
-      </header>
-      <div className="room">
-        <section className="board-column">
-          <div className="board-heading"><div><div className="eyebrow">CHESS / OPENING ATTACK</div><h1>Scholar's Mate Challenge</h1></div><div className="turn-chip"><span className="turn-dot" />{state.turn === 'w' ? 'White to move' : 'Black to move'}</div></div>
-          <Board state={state} selected={selected} legal={legal} onSquare={onSquare} animation={animation} />
-          <div className="board-caption"><span>Tap a piece, then choose a marked square.</span><span className="mono">{check.inCheck ? 'CHECK' : 'LEGAL PLAY'}</span></div>
-        </section>
-        <aside className="hud" aria-label="Challenge information">
-          <div className="hud-top"><div className="hud-label">Focus</div><h2 className="hud-title">Build a direct attack on the exposed king.</h2><div className="hud-focus">A sparse position. A precise idea. Every move is yours.</div></div>
-          <div className="hud-section"><div className="metric-row"><span className="hud-label">Player moves</span><span className="metric-value" data-testid="text-move-count">{whiteMoves} / 4</span></div><div className="progress-track"><div className="progress-bar" style={{ width: `${Math.min(100, whiteMoves / 4 * 100)}%` }} /></div></div>
-          <div className="hud-section"><p className="objective">Deliver checkmate in 4 moves or fewer.</p></div>
-          <div className="hud-section"><div className="hud-label">Starting position</div><p className="setup-text" data-testid="text-setup">White: Ke1, Qd1, Bc4, Ng1, pawns e2/f2/g2/h2. Black: Ke8, pawns f7/g7/h7. White to move.</p></div>
-          <div className={`hud-section status-box ${result === 'success' ? 'success' : result === 'failure' ? 'failure' : ''}`} data-testid="status-challenge"><StatusIcon size={16} /><span>{notice}</span></div>
-          <div className="hud-section"><div className="capture-title"><span>Captured by White</span><span>{state.captured.filter((p) => p.color === 'b').length}</span></div><CapturedStrip pieces={state.captured} color="b" /><div className="capture-title" style={{ marginTop: 15 }}><span>Captured by Black</span><span>{state.captured.filter((p) => p.color === 'w').length}</span></div><CapturedStrip pieces={state.captured} color="w" /></div>
-          <div className="hud-section"><div className="moves-title"><span>Move record</span><span>{state.history.length ? `${state.history.length} ply` : 'empty'}</span></div><div className="move-list">{state.history.length === 0 && <span className="capture-empty">Your line will appear here.</span>}{Array.from({ length: Math.ceil(state.history.length / 2) }, (_, row) => <div className="move-row" key={row}><span className="move-num">{row + 1}.</span><span className={`move-san ${state.history[row * 2] === lastMove ? 'active' : ''}`}>{moveLabel(state.history[row * 2], rowState(state, row * 2))}</span><span className={`move-san ${state.history[row * 2 + 1] === lastMove ? 'active' : ''}`}>{state.history[row * 2 + 1] ? moveLabel(state.history[row * 2 + 1], rowState(state, row * 2 + 1)) : ''}</span></div>)}</div></div>
-          <div className="hud-actions"><button className="action-btn" type="button" onClick={reset} data-testid="button-reset"><RotateCcw size={14} /> Reset</button><button className="action-btn" type="button" onClick={() => setNotice('The authored opening idea is Bxf7+, from c4 to f7.')} data-testid="button-hint"><CircleHelp size={14} /> Hint</button></div>
-        </aside>
+  return (
+    <div className="board-inner" ref={holderRef} data-testid="chess-board">
+      <canvas className="board-canvas" ref={canvasRef} aria-label="Playable chess board" />
+      <div className="board-hit-grid" role="grid" aria-label="Chess squares">
+        {Array.from({ length: 64 }, (_, index) => {
+          const x = index % 8;
+          const y = Math.floor(index / 8);
+          const square = squareName(x, y);
+          const destination = destinationMap.get(square);
+          return (
+            <button
+              key={square}
+              type="button"
+              className="square-hit"
+              data-testid={`square-${square}`}
+              aria-label={`${square}${destination ? ', legal destination' : ''}`}
+              onClick={() => onSquareClick(square)}
+            />
+          );
+        })}
       </div>
     </div>
-    {promotion && <div className="result-overlay" role="dialog"><div className="result-card"><div className="result-mark"><ChevronRight /></div><h2>Choose promotion</h2><p>Select the piece your pawn becomes.</p><div className="hud-actions">{(['q', 'r', 'b', 'n'] as PieceType[]).map((type) => <button className="action-btn primary" type="button" key={type} onClick={() => commitMove(promotion.move, type)} data-testid={`button-promote-${type}`}>{PIECE_NAMES[type]}</button>)}</div></div></div>}
-    {result && <div className="result-overlay" role="dialog"><div className={`result-card ${result}`}><div className="result-mark">{result === 'success' ? <Trophy size={25} /> : <AlertTriangle size={25} />}</div><h2>{result === 'success' ? 'Challenge complete' : 'Attack interrupted'}</h2><p>{result === 'success' ? 'Checkmate landed inside the four-move limit.' : 'The king survived the four-move window. Reset and find a sharper line.'}</p><button className="action-btn primary" type="button" onClick={reset} data-testid="button-result-reset"><RotateCcw size={14} /> Try again</button></div></div>}
-    {notice && !result && state.history.length > 0 && <div className="toast" data-testid="text-latest-status">{notice}</div>}
-  </main>;
+  );
 }
 
-function rowState(state: GameState, moveIndex: number) {
-  let snapshot = parseFen(START_FEN);
-  for (let i = 0; i < moveIndex; i++) snapshot = makeMove(snapshot, state.history[i]);
-  return snapshot;
+function Home() {
+  const [board, setBoard] = useState<Board>(() => parseFen('4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1'));
+  const [selected, setSelected] = useState<string | null>(null);
+  const [history, setHistory] = useState<Array<{ move: Move; label: string; side: Color }>>([]);
+  const [captured, setCaptured] = useState<Piece[]>([]);
+  const [turn, setTurn] = useState<Color>('w');
+  const [thinking, setThinking] = useState(false);
+  const [result, setResult] = useState<'playing' | 'success' | 'failure'>('playing');
+  const [animation, setAnimation] = useState<Animation | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const moveCount = history.filter((item) => item.side === 'w').length;
+  const selectedMoves = selected ? legalMoves(board, 'w', selected) : [];
+
+  useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current); }, []);
+
+  const reset = () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    setBoard(parseFen('4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1'));
+    setSelected(null); setHistory([]); setCaptured([]); setTurn('w'); setThinking(false); setResult('playing'); setAnimation(null);
+  };
+
+  const acceptCpuMove = (currentBoard: Board, moveNumber: number) => {
+    const cpuMove = chooseCpuMove(currentBoard);
+    if (!cpuMove) {
+      setThinking(false); setTurn('w');
+      setResult(isInCheck(currentBoard, 'w') ? 'failure' : 'failure');
+      return;
+    }
+    const next = applyMove(currentBoard, cpuMove);
+    setAnimation({ move: cpuMove, boardBefore: currentBoard, started: performance.now() });
+    setBoard(next);
+    setHistory((items) => [...items, { move: cpuMove, label: moveLabel(cpuMove, next), side: 'b' }]);
+    if (cpuMove.captured) setCaptured((items) => [...items, cpuMove.captured as Piece]);
+    setThinking(false);
+    setTurn('w');
+    if (isCheckmate(next, 'w') || isStalemate(next, 'w') || moveNumber >= 4) setResult('failure');
+    window.setTimeout(() => setAnimation(null), 390);
+  };
+
+  const onSquareClick = (square: string) => {
+    if (thinking || result !== 'playing' || turn !== 'w') return;
+    const piece = board[parseSquare(square)[1]][parseSquare(square)[0]];
+    const chosenMove = selectedMoves.find((move) => move.to === square);
+    if (chosenMove) {
+      const next = applyMove(board, chosenMove);
+      setAnimation({ move: chosenMove, boardBefore: board, started: performance.now() });
+      setBoard(next);
+      setHistory((items) => [...items, { move: chosenMove, label: moveLabel(chosenMove, next), side: 'w' }]);
+      if (chosenMove.captured) setCaptured((items) => [...items, chosenMove.captured as Piece]);
+      setSelected(null);
+      const nextCount = moveCount + 1;
+      if (isCheckmate(next, 'b')) {
+        setResult('success'); setTurn('w'); window.setTimeout(() => setAnimation(null), 390); return;
+      }
+      if (isStalemate(next, 'b') || nextCount >= 4) {
+        setResult('failure'); setTurn('w'); window.setTimeout(() => setAnimation(null), 390); return;
+      }
+      setThinking(true); setTurn('b');
+      timerRef.current = window.setTimeout(() => acceptCpuMove(next, nextCount), 680);
+      return;
+    }
+    if (piece?.color === 'w') setSelected(selected === square ? null : square);
+    else setSelected(null);
+  };
+
+  const statusText = result === 'success' ? 'Challenge complete' : result === 'failure' ? 'Challenge closed' : thinking ? 'CPU thinking' : 'White to move';
+  const pillClass = result === 'success' ? 'success' : result === 'failure' ? 'fail' : thinking ? 'thinking' : '';
+  const whiteTaken = captured.filter((piece) => piece.color === 'b');
+  const blackTaken = captured.filter((piece) => piece.color === 'w');
+
+  return (
+    <main className="room">
+      <header className="room-header">
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true"><Trophy /></div>
+          <div>
+            <div className="brand-title" data-testid="text-brand">MK BOARD GAMES</div>
+            <div className="brand-subtitle">MANUAL CHALLENGE ROOM</div>
+          </div>
+        </div>
+        <div className="header-note">CHALLENGE 01 / WEB EDITION<br />FOUR MOVES. NO SHORTCUTS.</div>
+      </header>
+
+      <div className="main-grid">
+        <section aria-labelledby="challenge-title">
+          <div className="eyebrow">CHESS / OPENING ATTACK</div>
+          <h1 className="hero-title" id="challenge-title" data-testid="text-challenge-title">Scholar's Mate<br />Challenge</h1>
+          <p className="hero-subtitle">A precise opening attack from a sparse position.</p>
+          <div className={`turn-pill ${pillClass}`} data-testid="status-turn"><span className="turn-dot" />{statusText}</div>
+          <div className="board-wrap">
+            <div className="board-frame">
+              <ChessBoard board={board} selected={selected} destinations={selectedMoves} animation={animation} onSquareClick={onSquareClick} />
+              <div className="board-coordinates rank-labels" aria-hidden="true">{[8,7,6,5,4,3,2,1].map((rank) => <span key={rank}>{rank}</span>)}</div>
+              <div className="board-coordinates file-labels" aria-hidden="true">{['a','b','c','d','e','f','g','h'].map((file) => <span key={file}>{file}</span>)}</div>
+            </div>
+            <div className="board-instruction">
+              <span>Tap a piece, then choose a marked square.</span>
+              <span className="legal">LEGAL PLAY</span>
+            </div>
+          </div>
+        </section>
+
+        <aside className="side-column">
+          {result !== 'playing' && (
+            <div className={`result-banner ${result === 'failure' ? 'failure' : ''}`} data-testid="status-result">
+              {result === 'success' ? 'CHECKMATE. THE DIRECT ATTACK LANDED WITHIN FOUR MOVES.' : 'THE WINDOW HAS CLOSED. RESET THE ROOM AND TRY A CLEANER LINE.'}
+            </div>
+          )}
+          <div className="focus-card">
+            <div className="section-label">FOCUS</div>
+            <h2 className="focus-title">Build a direct attack on the exposed king.</h2>
+            <p className="focus-copy">A sparse position. A precise idea. Every move is yours.</p>
+            <div className="divider" />
+            <div className="position-line"><span>OBJECTIVE</span><strong>CHECKMATE THE KING</strong></div>
+            <div className="position-line" style={{ marginTop: 13 }}><span>PLAYER LIMIT</span><strong>{moveCount} / 4 WHITE MOVES</strong></div>
+            <div className="position-line" style={{ marginTop: 13 }}><span>CAPTURED</span><strong data-testid="text-captured">{whiteTaken.length ? `BLACK ${whiteTaken.map((piece) => PIECE_NAMES[piece.type]).join(', ')}` : 'NONE'}</strong></div>
+          </div>
+          <div className="move-panel">
+            <div className="move-panel-head"><div className="section-label">MOVE RECORD</div><div className="move-count">{history.length} PLY</div></div>
+            <div className="move-list" data-testid="text-move-history">
+              {history.length ? history.map((item, index) => <span key={`${item.label}-${index}`} className={item.side === 'b' ? 'cpu' : ''}>{item.side === 'w' ? `${Math.floor(index / 2) + 1}.` : 'CPU'} {item.label}</span>) : <span className="empty-moves">NO MOVES YET</span>}
+            </div>
+            <div className="position-line" style={{ marginTop: 16 }}><span>YOUR PIECES TAKEN</span><strong>{blackTaken.length ? blackTaken.map((piece) => PIECE_NAMES[piece.type]).join(', ') : 'NONE'}</strong></div>
+            <button type="button" className="reset-button" data-testid="button-reset" onClick={reset}><RotateCcw size={14} /> Reset challenge</button>
+          </div>
+        </aside>
+      </div>
+      <div className="footnote">MK BOARD GAMES / CHALLENGE 01 / WHITE TO MOVE / LEGAL PLAY ONLY</div>
+    </main>
+  );
 }
-function Router() { return <RoutedErrorBoundary><Switch><Route path="/" component={ChessRoom} /><Route component={NotFound} /></Switch></RoutedErrorBoundary>; }
-function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
-function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
+
+function Router() {
+  return (
+    <ErrorBoundary resetKey={useLocation()[0]}>
+      <Switch>
+        <Route path="/" component={Home} />
+        <Route component={NotFound} />
+      </Switch>
+    </ErrorBoundary>
+  );
+}
+
+function App() {
+  return <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter>;
+}
+
 export default App;

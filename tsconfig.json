@@ -2,7 +2,11 @@
   "compilerOptions": {
     "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -15,23 +19,18 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["node", "vite/client"],
+    "types": [
+      "node",
+      "vite/client"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": [
+        "src/*"
+      ]
     }
   },
   "include": [
-    "src/App.tsx",
-    "src/main.tsx",
-    "src/components/error-boundary.tsx",
-    "src/components/ui/card.tsx",
-    "src/components/ui/toast.tsx",
-    "src/components/ui/toaster.tsx",
-    "src/components/ui/tooltip.tsx",
-    "src/hooks/use-toast.ts",
-    "src/lib/utils.ts",
-    "src/pages/not-found.tsx",
-    "vite.config.ts"
+    "src"
   ]
 }
