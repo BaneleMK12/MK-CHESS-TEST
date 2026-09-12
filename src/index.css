@@ -89,7 +89,29 @@ button:focus-visible { outline: 2px solid hsl(var(--accent)); outline-offset: 3p
 }
 .brand-title { font-weight: 600; font-size: 16px; letter-spacing: .2em; }
 .brand-subtitle { margin-top: 7px; color: hsl(var(--muted-foreground)); font-size: 11px; }
+.header-tools { display: flex; align-items: center; gap: 24px; }
 .header-note { color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 11px; letter-spacing: .12em; text-align: right; }
+.challenge-nav { display: flex; align-items: center; gap: 10px; padding-left: 20px; border-left: 1px solid hsl(var(--border)); }
+.challenge-nav-label { color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 9px; letter-spacing: .12em; }
+.challenge-nav-buttons { display: flex; gap: 5px; }
+.challenge-nav-button {
+  min-width: 34px;
+  padding: 8px 7px;
+  color: hsl(var(--muted-foreground));
+  border: 1px solid hsl(67 13% 27%);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  transition: color .2s ease, border-color .2s ease, background-color .2s ease;
+}
+.challenge-nav-button:hover, .challenge-nav-button.active {
+  color: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  background: rgba(191,157,79,.09);
+}
 .main-grid {
   width: min(1200px, calc(100% - 40px));
   margin: 0 auto;
@@ -218,6 +240,7 @@ button:focus-visible { outline: 2px solid hsl(var(--accent)); outline-offset: 3p
 @media (max-width: 800px) {
   .room-header { padding-top: 22px; }
   .header-note { display: none; }
+  .header-tools { margin-left: auto; }
   .main-grid { display: block; padding-top: 32px; }
   .hero-title { font-size: clamp(39px, 11vw, 58px); }
   .board-wrap { margin-top: 10px; }
@@ -229,6 +252,8 @@ button:focus-visible { outline: 2px solid hsl(var(--accent)); outline-offset: 3p
   .brand-mark { width: 42px; height: 42px; }
   .brand-title { font-size: 13px; }
   .brand-subtitle { font-size: 9px; }
+  .challenge-nav { padding-left: 0; border-left: 0; }
+  .challenge-nav-label { display: none; }
   .main-grid { padding-bottom: 42px; }
   .hero-subtitle { font-size: 12px; }
   .board-frame { padding: 10px 10px 25px; }

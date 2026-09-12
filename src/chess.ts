@@ -19,6 +19,9 @@ export type Move = {
 export const START_FEN =
   '4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1';
 
+export const QUEENLESS_CHALLENGE_FEN =
+  '4k3/5ppp/8/8/2B5/8/4PPPP/4K1N1 w - - 0 1';
+
 export const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
 export function parseSquare(square: string): [number, number] {

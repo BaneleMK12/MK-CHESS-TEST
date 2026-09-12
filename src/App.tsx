@@ -12,6 +12,8 @@ import {
   parseFen,
   parseSquare,
   squareName,
+  START_FEN,
+  QUEENLESS_CHALLENGE_FEN,
   type Board,
   type Color,
   type Move,
@@ -26,8 +28,44 @@ import {
 } from 'wouter';
 
 const PIECE_NAMES: Record<PieceType, string> = { k: 'KING', q: 'QUEEN', r: 'ROOK', b: 'BISHOP', n: 'KNIGHT', p: 'PAWN' };
-const MAX_WHITE_MOVES = 4;
 const FAILED_ATTEMPTS_KEY = 'mk-chess-failed-attempts';
+const UNLOCKED_CHALLENGE_KEY = 'mk-chess-unlocked-challenge';
+
+type ChallengeId = 1 | 2;
+
+type Challenge = {
+  id: ChallengeId;
+  title: [string, string];
+  headerLabel: string;
+  headerNote: string;
+  subtitle: string;
+  focusCopy: string;
+  maxWhiteMoves: number;
+  fen: string;
+};
+
+const CHALLENGES: Record<ChallengeId, Challenge> = {
+  1: {
+    id: 1,
+    title: ["Scholar's Mate", 'Challenge'],
+    headerLabel: 'CHALLENGE 01',
+    headerNote: 'FOUR MOVES. NO SHORTCUTS.',
+    subtitle: 'A precise opening attack from a sparse position.',
+    focusCopy: 'A sparse position. A precise idea. Every move is yours.',
+    maxWhiteMoves: 4,
+    fen: START_FEN,
+  },
+  2: {
+    id: 2,
+    title: ['Queenless Attack', 'Challenge'],
+    headerLabel: 'CHALLENGE 02',
+    headerNote: 'EIGHT MOVES. NO QUEEN.',
+    subtitle: 'A precise opening attack without the queen.',
+    focusCopy: 'A sparse position. A precise idea. Every move is yours.',
+    maxWhiteMoves: 8,
+    fen: QUEENLESS_CHALLENGE_FEN,
+  },
+};
 
 type Animation = { move: Move; boardBefore: Board; started: number };
 
@@ -194,11 +232,17 @@ function ChessBoard({
 }
 
 function Home() {
-  const [board, setBoard] = useState<Board>(() => parseFen('4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1'));
+  const [challengeId, setChallengeId] = useState<ChallengeId>(1);
+  const challenge = CHALLENGES[challengeId];
+  const [board, setBoard] = useState<Board>(() => parseFen(challenge.fen));
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ move: Move; label: string; side: Color }>>([]);
   const [captured, setCaptured] = useState<Piece[]>([]);
   const [whiteMoveCount, setWhiteMoveCount] = useState(0);
+  const [unlockedChallenge, setUnlockedChallenge] = useState<ChallengeId>(() => {
+    const saved = Number(window.localStorage.getItem(UNLOCKED_CHALLENGE_KEY));
+    return saved === 2 ? 2 : 1;
+  });
   const [failedAttempts, setFailedAttempts] = useState(() => {
     const saved = Number(window.localStorage.getItem(FAILED_ATTEMPTS_KEY));
     return Number.isFinite(saved) && saved >= 0 ? saved : 0;
@@ -218,6 +262,9 @@ function Home() {
   useEffect(() => {
     window.localStorage.setItem(FAILED_ATTEMPTS_KEY, String(failedAttempts));
   }, [failedAttempts]);
+  useEffect(() => {
+    window.localStorage.setItem(UNLOCKED_CHALLENGE_KEY, String(unlockedChallenge));
+  }, [unlockedChallenge]);
 
   const finishFailure = () => {
     if (attemptFinishedRef.current) return;
@@ -238,15 +285,17 @@ function Home() {
     setTurn('w');
     setSelected(null);
     setResult('success');
+    if (challengeId === 1) setUnlockedChallenge(2);
   };
 
-  const reset = () => {
+  const startChallenge = (nextChallengeId: ChallengeId) => {
     if (timerRef.current) window.clearTimeout(timerRef.current);
     attemptIdRef.current += 1;
     attemptFinishedRef.current = false;
     thinkingRef.current = false;
     whiteMoveCountRef.current = 0;
-    setBoard(parseFen('4k3/5ppp/8/8/2B5/8/4PPPP/3QK1N1 w - - 0 1'));
+    setChallengeId(nextChallengeId);
+    setBoard(parseFen(CHALLENGES[nextChallengeId].fen));
     setSelected(null);
     setHistory([]);
     setCaptured([]);
@@ -256,6 +305,8 @@ function Home() {
     setResult('playing');
     setAnimation(null);
   };
+
+  const reset = () => startChallenge(challengeId);
 
   const acceptCpuMove = (currentBoard: Board, attemptId: number) => {
     if (attemptId !== attemptIdRef.current || attemptFinishedRef.current) return;
@@ -278,7 +329,7 @@ function Home() {
 
   const onSquareClick = (square: string) => {
     if (thinkingRef.current || attemptFinishedRef.current || result !== 'playing' || turn !== 'w') return;
-    if (whiteMoveCountRef.current >= MAX_WHITE_MOVES) {
+    if (whiteMoveCountRef.current >= challenge.maxWhiteMoves) {
       finishFailure();
       return;
     }
@@ -300,7 +351,7 @@ function Home() {
         window.setTimeout(() => setAnimation(null), 390);
         return;
       }
-      if (isStalemate(next, 'b') || nextCount >= MAX_WHITE_MOVES) {
+      if (isStalemate(next, 'b') || nextCount >= challenge.maxWhiteMoves) {
         finishFailure();
         window.setTimeout(() => setAnimation(null), 390);
         return;
@@ -330,14 +381,35 @@ function Home() {
             <div className="brand-subtitle">MANUAL CHALLENGE ROOM</div>
           </div>
         </div>
-        <div className="header-note">CHALLENGE 01 / WEB EDITION<br />FOUR MOVES. NO SHORTCUTS.</div>
+        <div className="header-tools">
+          <div className="header-note">{challenge.headerLabel} / WEB EDITION<br />{challenge.headerNote}</div>
+          {unlockedChallenge === 2 && (
+            <nav className="challenge-nav" aria-label="Unlocked challenges" data-testid="challenge-nav">
+              <div className="challenge-nav-label">CHALLENGES</div>
+              <div className="challenge-nav-buttons">
+                {[1, 2].map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`challenge-nav-button ${challengeId === id ? 'active' : ''}`}
+                    aria-current={challengeId === id ? 'page' : undefined}
+                    data-testid={`button-challenge-${id}`}
+                    onClick={() => startChallenge(id as ChallengeId)}
+                  >
+                    {String(id).padStart(2, '0')}
+                  </button>
+                ))}
+              </div>
+            </nav>
+          )}
+        </div>
       </header>
 
       <div className="main-grid">
         <section aria-labelledby="challenge-title">
           <div className="eyebrow">CHESS / OPENING ATTACK</div>
-          <h1 className="hero-title" id="challenge-title" data-testid="text-challenge-title">Scholar's Mate<br />Challenge</h1>
-          <p className="hero-subtitle">A precise opening attack from a sparse position.</p>
+          <h1 className="hero-title" id="challenge-title" data-testid="text-challenge-title">{challenge.title[0]}<br />{challenge.title[1]}</h1>
+          <p className="hero-subtitle">{challenge.subtitle}</p>
           <div className={`turn-pill ${pillClass}`} data-testid="status-turn"><span className="turn-dot" />{statusText}</div>
           <div className="board-wrap">
             <div className="board-frame">
@@ -355,16 +427,16 @@ function Home() {
         <aside className="side-column">
           {result !== 'playing' && (
             <div className={`result-banner ${result === 'failure' ? 'failure' : ''}`} data-testid="status-result">
-              {result === 'success' ? 'CHECKMATE. THE DIRECT ATTACK LANDED WITHIN FOUR MOVES.' : 'THE WINDOW HAS CLOSED. RESET THE ROOM AND TRY A CLEANER LINE.'}
+              {result === 'success' ? `CHECKMATE. THE DIRECT ATTACK LANDED WITHIN ${challenge.maxWhiteMoves} MOVES.` : 'THE WINDOW HAS CLOSED. RESET THE ROOM AND TRY A CLEANER LINE.'}
             </div>
           )}
           <div className="focus-card">
             <div className="section-label">FOCUS</div>
             <h2 className="focus-title">Build a direct attack on the exposed king.</h2>
-            <p className="focus-copy">A sparse position. A precise idea. Every move is yours.</p>
+            <p className="focus-copy">{challenge.focusCopy}</p>
             <div className="divider" />
             <div className="position-line"><span>OBJECTIVE</span><strong>CHECKMATE THE KING</strong></div>
-              <div className="position-line" style={{ marginTop: 13 }}><span>PLAYER LIMIT</span><strong>{whiteMoveCount} / {MAX_WHITE_MOVES} WHITE MOVES</strong></div>
+              <div className="position-line" style={{ marginTop: 13 }}><span>PLAYER LIMIT</span><strong>{whiteMoveCount} / {challenge.maxWhiteMoves} WHITE MOVES</strong></div>
               <div className="position-line" style={{ marginTop: 13 }}><span>FAILED ATTEMPTS</span><strong data-testid="text-failed-attempts">{failedAttempts}</strong></div>
             <div className="position-line" style={{ marginTop: 13 }}><span>CAPTURED</span><strong data-testid="text-captured">{whiteTaken.length ? `BLACK ${whiteTaken.map((piece) => PIECE_NAMES[piece.type]).join(', ')}` : 'NONE'}</strong></div>
           </div>
@@ -378,7 +450,7 @@ function Home() {
           </div>
         </aside>
       </div>
-      <div className="footnote">MK BOARD GAMES / CHALLENGE 01 / WHITE TO MOVE / LEGAL PLAY ONLY</div>
+      <div className="footnote">MK BOARD GAMES / {challenge.headerLabel} / WHITE TO MOVE / LEGAL PLAY ONLY</div>
     </main>
   );
 }
